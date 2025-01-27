@@ -122,4 +122,4 @@ async def main(email, password):
 
 
 if __name__ == "__main__":
-    asyncio.run(main("danilashkirdow@mail.ru", "Dd170296dD!"))
+    asyncio.run(main("email@mail.ru", "password!"))
