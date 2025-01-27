@@ -1,3 +1,4 @@
+import time
 from datetime import datetime
 from typing import Dict, List
 
@@ -14,7 +15,6 @@ class UbisoftMarketClient:
             auth_token (str): Токен авторизации
         """
 
-        # Настройка транспорта
         transport = RequestsHTTPTransport(
             url='https://public-ubiservices.ubi.com/v1/profiles/me/uplay/graphql',
             headers={'content-type': 'application/json',
@@ -24,12 +24,52 @@ class UbisoftMarketClient:
                      'User-Agent': 'UbiServices_SDK_2020.Release.58_PC64_ansi_static'},
             use_json=True,
         )
-
-        # Создание клиента
         self.client = Client(
             transport=transport,
             fetch_schema_from_transport=False
         )
+
+    def create_sell_order(self, space_id: str, item_id: str, quantity: int, price: int) -> Dict:
+        """
+        Создает ордер на продажу предмета.
+
+        Args:
+            space_id (str): ID пространства.
+            item_id (str): ID предмета.
+            quantity (int): Количество предметов для продажи.
+            price (int): Цена за единицу предмета.
+
+        Returns:
+            Dict: Ответ от API.
+        """
+        variables = {
+            "spaceId": space_id,
+            "tradeItems": [{"itemId": item_id, "quantity": quantity}],
+            "paymentOptions": [{"paymentItemId": "9ef71262-515b-46e8-b9a8-b6b6ad456c67", "price": price}]
+        }
+
+        mutation = gql("""
+            mutation CreateSellOrder($spaceId: String!, $tradeItems: [TradeOrderItem!]!, $paymentOptions: [PaymentItem!]!) {
+                createSellOrder(
+                    spaceId: $spaceId
+                    tradeItems: $tradeItems
+                    paymentOptions: $paymentOptions
+                ) {
+                    trade {
+                        id
+                        state
+                        tradeId
+                    }
+                }
+            }
+        """)
+
+        try:
+            result = self.client.execute(mutation, variable_values=variables)
+            return result
+        except Exception as e:
+            print(f"Ошибка при создании ордера на продажу: {str(e)}")
+            raise
 
     def get_sellable_items(
             self,
@@ -43,24 +83,6 @@ class UbisoftMarketClient:
             sort_direction: str = "ASC",
             payment_item_id: str = "9ef71262-515b-46e8-b9a8-b6b6ad456c67"
     ) -> Dict:
-        """
-        Получение списка предметов для продажи
-
-        Args:
-            space_id (str): ID игрового пространства
-            limit (int): Количество предметов на странице
-            offset (int): Смещение для пагинации
-            item_types (List[str]): Фильтр по типам предметов
-            tags (List[str]): Фильтр по тегам
-            with_ownership (bool): Включать ли информацию о владении
-            sort_field (str): Поле для сортировки
-            sort_direction (str): Направление сортировки (ASC/DESC)
-            payment_item_id (str): ID валюты для оплаты
-
-        Returns:
-            Dict: Результат запроса
-        """
-        # Формирование переменных запроса
         variables = {
             "spaceId": space_id,
             "limit": limit,
@@ -78,7 +100,6 @@ class UbisoftMarketClient:
             }
         }
 
-        # Запрос
         query = gql("""
                     query GetSellableItems($spaceId: String!, $limit: Int!, $offset: Int, $filterBy: MarketableItemFilter, $sortBy: MarketableItemSort) {
                         game(spaceId: $spaceId) {
@@ -133,25 +154,12 @@ class UbisoftMarketClient:
             raise
 
     def parse_market_data(self, response: Dict) -> List[Dict]:
-        """
-        Парсинг ответа API в удобный формат
-
-        Args:
-            response (Dict): Ответ API
-
-        Returns:
-            List[Dict]: Список предметов с рыночной информацией
-        """
         items = []
-
         try:
             nodes = response['game']['viewer']['meta']['marketableItems']['nodes']
-
             for node in nodes:
                 item_data = node['item']
                 market_data = node['marketData']
-
-                # Получение статистики продаж
                 sell_stats = market_data['sellStats'][0] if market_data['sellStats'] else None
                 last_sold = market_data['lastSoldAt'][0] if market_data['lastSoldAt'] else None
 
@@ -170,7 +178,6 @@ class UbisoftMarketClient:
                             last_sold['performedAt'].replace('Z', '+00:00')) if last_sold else None
                     }
                 }
-
                 items.append(parsed_item)
 
             return items
@@ -178,23 +185,93 @@ class UbisoftMarketClient:
             print(f"Ошибка при парсинге данных: {str(e)}")
             raise
 
+    def create_buy_order(self, space_id: str, item_id: str, quantity: int, price: int) -> Dict:
+        """
+        Создает ордер на покупку предмета.
+
+        Args:
+            space_id (str): ID пространства.
+            item_id (str): ID предмета.
+            quantity (int): Количество предметов для покупки.
+            price (int): Цена за единицу предмета.
+
+        Returns:
+            Dict: Ответ от API.
+        """
+        variables = {
+            "spaceId": space_id,
+            "tradeItems": [{"itemId": item_id, "quantity": quantity}],
+            "paymentProposal": {"paymentItemId": "9ef71262-515b-46e8-b9a8-b6b6ad456c67", "price": price}
+        }
+
+        mutation = gql("""
+               mutation CreateBuyOrder($spaceId: String!, $tradeItems: [TradeOrderItem!]!, $paymentProposal: PaymentItem!) {
+                   createBuyOrder(
+                       spaceId: $spaceId
+                       tradeItems: $tradeItems
+                       paymentProposal: $paymentProposal
+                   ) {
+                       trade {
+                           id
+                           tradeId
+                           state
+                       }
+                   }
+               }
+           """)
+
+        try:
+            result = self.client.execute(mutation, variable_values=variables)
+            return result
+        except Exception as e:
+            print(f"Ошибка при создании ордера на покупку: {str(e)}")
+            raise
+
+
+class MarketAnalyzer:
+    def __init__(self):
+        self.previous_data = {}
+
+    def analyze(self, items: List[Dict]):
+        significant_changes = []
+
+        for item in items:
+            item_id = item['item_id']
+            market_info = item['market_info']
+
+            if item_id in self.previous_data:
+                previous_market_info = self.previous_data[item_id]
+
+                # Проверка изменений
+                if market_info['last_sold_price'] and previous_market_info['last_sold_price']:
+                    price_change = market_info['last_sold_price'] - previous_market_info['last_sold_price']
+                    active_count_change = previous_market_info['active_listings'] - market_info['active_listings']
+
+                    if abs(price_change) > 0 or active_count_change > 0:
+                        significant_changes.append({
+                            'item_id': item_id,
+                            'name': item['name'],
+                            'price_change': price_change,
+                            'active_count_change': active_count_change,
+                            'new_price': market_info['last_sold_price'],
+                            'old_price': previous_market_info['last_sold_price'],
+                            'active_listings': market_info['active_listings']
+                        })
+
+            # Обновление текущего состояния
+            self.previous_data[item_id] = market_info
+
+        return significant_changes
+
 
 if __name__ == '__main__':
-    token='ubi...'
+    token = input("token")
     client = UbisoftMarketClient(auth_token=token)
-
-    for i in range(10):
-        # Получение предметов
-        response = client.get_sellable_items(
-            space_id="0d2ae42d-4c27-4cb7-af6c-2099062302bb",
-            limit=40,
-            offset=i * 40
-        )
-
-        # Парсинг и вывод данных
-        items = client.parse_market_data(response)
-        for item in items:
-            print(f"Предмет: {item['name']}")
-            print(f"Минимальная цена: {item['market_info']['lowest_price']}")
-            print(f"Последняя цена: {item['market_info']['last_sold_price']}")
-            print("---")
+    analyzer = MarketAnalyzer()
+    selling_list = []
+    result = client.create_buy_order(
+        space_id="0d2ae42d-4c27-4cb7-af6c-2099062302bb",
+        item_id="ea43dc95-8762-4f5f-a0d0-9dbd9777ae08",
+        quantity=5,
+        price=300  # Цена для покупки
+    )
