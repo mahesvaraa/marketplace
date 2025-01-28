@@ -6,27 +6,25 @@ from market_seller.auth2 import UbisoftAuth
 from market_seller.market_changer import MarketChangesTracker
 from market_seller.market_client import AsyncUbisoftMarketClient
 
-
-async def run_main_logic(auth: UbisoftAuth):
+async def run_main_logic(auth: UbisoftAuth, sell_price=9900):
     client = AsyncUbisoftMarketClient(auth=auth)
     await client.init_session()
 
     last_token_refresh = datetime.now()
     refresh_interval = timedelta(minutes=15)
 
-    try:
-        analyzer = MarketAnalyzer(client)
-        tracker = MarketChangesTracker(history_size=10)
+    analyzer = MarketAnalyzer(client)
+    tracker = MarketChangesTracker(history_size=10)
 
+    try:
         while True:
             # Проверяем необходимость обновления токена
             if datetime.now() - last_token_refresh > refresh_interval:
-                print("Refreshing token...", end=' ')
                 client.auth.refresh_token()
                 last_token_refresh = datetime.now()
 
-            all_items = []
             try:
+                # Получение всех доступных для продажи предметов
                 tasks = [
                     client.get_sellable_items(
                         space_id="0d2ae42d-4c27-4cb7-af6c-2099062302bb",
@@ -38,29 +36,34 @@ async def run_main_logic(auth: UbisoftAuth):
 
                 responses = await asyncio.gather(*tasks)
 
+                all_items = []
                 for response in responses:
                     items = client.parse_market_data(response)
                     all_items.extend(items)
 
-                changes = await analyzer.analyze(all_items)
+                # Анализ изменений на рынке
+                changes = await analyzer.analyze(all_items, sell_price=sell_price)
                 if changes:
-                    now = datetime.now()
-                    current_time = now.strftime("%H:%M:%S")
+                    current_time = datetime.now().strftime("%H:%M:%S")
                     frequent_changes = tracker.add_changes(changes)
+
+                    # Обработка частых изменений
                     if frequent_changes:
-                        print("\nFrequent changes detected:")
+                        print("\nОбнаружены частые изменения:")
                         for change in frequent_changes:
-                            if change.get("item_id") not in analyzer.selling_list:
+                            item_id = change.get("item_id")
+                            if item_id not in analyzer.selling_list:
                                 result = await client.create_sell_order(
                                     space_id="0d2ae42d-4c27-4cb7-af6c-2099062302bb",
-                                    item_id=change.get("item_id"),
+                                    item_id=item_id,
                                     quantity=1,
-                                    price=9900,
+                                    price=sell_price,
                                 )
-                                print(f"Order created: {result}")
-                                analyzer.selling_list.append(change.get("item_id"))
+                                print(f"Ордер создан: {result}")
+                                analyzer.selling_list.append(item_id)
                                 analyzer.print_change_info(change)
 
+                    # Логирование изменений
                     for change in changes:
                         print(
                             f"[{current_time}]   ",
@@ -74,26 +77,31 @@ async def run_main_logic(auth: UbisoftAuth):
                 await asyncio.sleep(5)
 
             except Exception as e:
-                if "{'code': 1895}" in str(e):
-                    print("Ошибка при создании ордера. Товар пока нельзя продавать")
-                    analyzer.selling_list.append(change.get("item_id"))
-                elif "{'code': 1821}" in str(e):
-                    print("Ошибка при создании ордера. Товар уже продается")
-                    analyzer.selling_list.append(change.get("item_id"))
-                elif "Invalid Ticket".lower() in str(e).lower():
-                    analyzer.client.auth.refresh_token()
-                print(f"Error in main loop: {e}")
-
-                # await client.close_session()
+                await handle_exception(e, analyzer, change)
 
     except Exception as e:
-        print(f"Error: {e}")
-        # await client.close_session()
-    # finally:
-    #     await client.close_session()
+        print(f"Критическая ошибка: {e}")
+    finally:
+        await client.close_session()
 
 
-async def main(email, password):
+async def handle_exception(exception, analyzer, change):
+    error_message = str(exception)
+
+    if "{'code': 1895}" in error_message:
+        print("Ошибка: Товар пока нельзя продавать")
+        analyzer.selling_list.append(change.get("item_id"))
+    elif "{'code': 1821}" in error_message:
+        print("Ошибка: Товар уже продается")
+        analyzer.selling_list.append(change.get("item_id"))
+    elif "Invalid Ticket".lower() in error_message.lower():
+        print("Ошибка: Невалидный токен, обновляем...")
+        analyzer.client.auth.refresh_token()
+    else:
+        print(f"Неожиданная ошибка: {exception}")
+
+
+async def main(email, password, sell_price=9900):
     restart_interval = timedelta(minutes=60)
 
     while True:
@@ -101,25 +109,24 @@ async def main(email, password):
         auth = UbisoftAuth(email, password)
 
         if auth.is_token_expired():
-            print("Token is expired or invalid. Attempting to refresh session...")
+            print("Токен истек или недействителен. Пытаемся обновить сессию...")
             if not auth.ensure_valid_token():
-                print("Session refresh failed. Manual authentication required.")
+                print("Не удалось обновить сессию. Требуется ручная аутентификация.")
                 auth.basic_auth(auth.email, auth.password)
                 if auth.two_factor_ticket:
-                    code = input("Enter 2FA code: ")
+                    code = input("Введите код двухфакторной аутентификации: ")
                     auth.complete_2fa(code)
         else:
-            print("Successfully authenticated using saved tokens")
+            print("Успешная аутентификация с использованием сохраненных токенов")
 
         try:
-            await run_main_logic(auth)
+            await run_main_logic(auth, sell_price=sell_price)
         except Exception as e:
-            print(f"Error during execution: {e}")
+            print(f"Ошибка во время выполнения: {e}")
 
         if datetime.now() - start_time > restart_interval:
-            print("Restarting due to token refresh requirement...")
-            continue  # Перезапускаем функцию с нуля
+            print("Перезапуск из-за необходимости обновления токена...")
 
 
 if __name__ == "__main__":
-    asyncio.run(main("email@mail.ru", "password!"))
+    asyncio.run(main("email@mail.ru", "password!", sell_price=9900))

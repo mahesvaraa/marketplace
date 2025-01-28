@@ -1,4 +1,3 @@
-# auth.py
 import base64
 import json
 import os
@@ -38,11 +37,11 @@ class UbisoftAuth:
         self.email = email
         self.password = password
 
-        # Load saved tokens on initialization
+        # Загрузка сохранённого токена при инициализации
         self.load_token()
 
     def start_token_refresh(self):
-        """Start background token refresh thread"""
+        """Запуск фонового потока для обновления токена"""
         if self._refresh_thread is None:
             self._stop_refresh = False
             self._refresh_thread = threading.Thread(
@@ -51,26 +50,26 @@ class UbisoftAuth:
             self._refresh_thread.start()
 
     def stop_token_refresh(self):
-        """Stop background token refresh thread"""
+        """Остановка фонового потока для обновления токена"""
         self._stop_refresh = True
         if self._refresh_thread:
             self._refresh_thread.join()
             self._refresh_thread = None
 
     def _token_refresh_loop(self):
-        """Background loop for token refresh"""
+        """Фоновый цикл для обновления токена"""
         while not self._stop_refresh:
             time.sleep(REFRESH_INTERVAL_MINUTES * 60)
-            if not self._stop_refresh:  # Check again after sleep
+            if not self._stop_refresh:
                 try:
                     self.refresh_token()
                 except Exception as e:
-                    print(f"Error in token refresh loop: {e}")
+                    print(f"Ошибка в цикле обновления токена: {e}")
 
     def refresh_token(self) -> Dict[str, Any]:
-        """Refresh token using previous token"""
+        """Обновление токена с использованием текущего токена"""
         if not self.token:
-            return {"error": "No token available"}
+            return {"error": "Нет доступного токена"}
 
         url = f"{self.base_url}/profiles/sessions"
         headers = self.headers.copy()
@@ -83,15 +82,13 @@ class UbisoftAuth:
             response_data = response.json()
 
             if response.status_code != 200:
-                print(f"Token refresh failed with status {response.status_code}")
+                print(f"Не удалось обновить токен. Статус: {response.status_code}")
                 return response_data
 
             if "ticket" in response_data:
                 self.token = response_data["ticket"]
                 self.headers["Authorization"] = f"Ubi_v1 t={self.token}"
-                self.token_expiry = datetime.now() + timedelta(
-                    hours=TOKEN_LIFETIME_HOURS
-                )
+                self.token_expiry = datetime.now() + timedelta(hours=TOKEN_LIFETIME_HOURS)
 
                 remember_me_ticket = response_data.get("rememberMeTicket")
                 if remember_me_ticket:
@@ -104,17 +101,17 @@ class UbisoftAuth:
                     self.two_factor_ticket,
                     self.remember_me_ticket,
                 )
-                print("Token refreshed successfully")
+                print("Токен успешно обновлён")
 
             return response_data
 
         except requests.exceptions.RequestException as e:
-            print(f"Request error during token refresh: {str(e)}")
-            winsound.PlaySound("C:\Windows\Media\Windows Logon.wav", winsound.SND_FILENAME )
+            print(f"Ошибка запроса при обновлении токена: {str(e)}")
+            winsound.PlaySound("C:\\Windows\\Media\\Windows Logon.wav", winsound.SND_FILENAME)
             return {"error": str(e)}
 
     def clear_saved_data(self):
-        """Clear all saved authentication data"""
+        """Очистка всех сохранённых данных аутентификации"""
         self.token = None
         self.session_id = None
         self.two_factor_ticket = None
@@ -125,7 +122,7 @@ class UbisoftAuth:
         self.save_token(None, None, None, None)
 
     def load_token(self):
-        """Load token data from file"""
+        """Загрузка токена из файла"""
         if os.path.exists(TOKEN_FILE):
             try:
                 with open(TOKEN_FILE, "r") as f:
@@ -141,12 +138,10 @@ class UbisoftAuth:
                     if self.token:
                         self.headers["Authorization"] = f"Ubi_v1 t={self.token}"
                     if self.remember_me_ticket:
-                        self.headers["ubi-rememberdeviceticket"] = (
-                            self.remember_me_ticket
-                        )
+                        self.headers["ubi-rememberdeviceticket"] = self.remember_me_ticket
 
             except Exception as e:
-                print(f"Error loading token file: {e}")
+                print(f"Ошибка при загрузке токена: {e}")
                 self.clear_saved_data()
 
     @staticmethod
@@ -156,7 +151,7 @@ class UbisoftAuth:
         two_factor_ticket: Optional[str] = None,
         remember_me_ticket: Optional[str] = None,
     ):
-        """Save token data to file"""
+        """Сохранение токена в файл"""
         try:
             data = {
                 "token": token,
@@ -172,29 +167,29 @@ class UbisoftAuth:
                 json.dump(data, f)
 
         except Exception as e:
-            print(f"Error saving token file: {e}")
+            print(f"Ошибка при сохранении токена: {e}")
 
     def is_token_expired(self) -> bool:
-        """Check if the current token has expired"""
+        """Проверка, истёк ли текущий токен"""
         if not self.token or not self.token_expiry:
             return True
 
-        # Check token expiration time
+        # Проверка времени истечения токена
         if datetime.now() > self.token_expiry:
             return True
 
-        # Validate token with API
+        # Валидация токена через API
         try:
             response = self.session.get(
                 f"{self.base_url}/profiles/me", headers=self.headers
             )
             return response.status_code != 200
         except Exception as e:
-            print(f"Error checking token: {e}")
+            print(f"Ошибка при проверке токена: {e}")
             return True
 
     def ensure_valid_token(self) -> bool:
-        """Check and refresh token if needed"""
+        """Проверка и обновление токена, если это необходимо"""
         if self.is_token_expired():
             if self.token:
                 try:
@@ -202,8 +197,8 @@ class UbisoftAuth:
                     if "ticket" in response:
                         return True
                 except Exception as e:
-                    print(f"Failed to refresh token: {e}")
-                    winsound.PlaySound("C:\Windows\Media\Windows Logon.wav", winsound.SND_FILENAME )
+                    print(f"Ошибка при обновлении токена: {e}")
+                    winsound.PlaySound("C:\\Windows\\Media\\Windows Logon.wav", winsound.SND_FILENAME)
 
             if self.remember_me_ticket:
                 try:
@@ -211,15 +206,15 @@ class UbisoftAuth:
                     if "ticket" in response:
                         return True
                 except Exception as e:
-                    print(f"Failed to refresh session: {e}")
-                    winsound.PlaySound(r"C:\Windows\Media\Windows Logon.wav", winsound.SND_FILENAME )
+                    print(f"Ошибка при обновлении с помощью remember_me_ticket: {e}")
+                    winsound.PlaySound("C:\\Windows\\Media\\Windows Logon.wav", winsound.SND_FILENAME)
 
             self.clear_saved_data()
             return False
         return True
 
     def basic_auth(self, email: str, password: str) -> Dict[str, Any]:
-        """Perform basic authentication"""
+        """Выполнение базовой аутентификации"""
         url = f"{self.base_url}/profiles/sessions"
 
         auth_string = f"{email}:{password}"
@@ -235,7 +230,7 @@ class UbisoftAuth:
             response_data = response.json()
 
             if response.status_code != 200:
-                print(f"Authentication failed with status {response.status_code}")
+                print(f"Ошибка аутентификации. Статус: {response.status_code}")
                 self.clear_saved_data()
                 return response_data
 
@@ -246,14 +241,14 @@ class UbisoftAuth:
             return response_data
 
         except requests.exceptions.RequestException as e:
-            print(f"Request error: {str(e)}")
+            print(f"Ошибка запроса: {str(e)}")
             self.clear_saved_data()
             return {"error": str(e)}
 
     def complete_2fa(self, code: str) -> Dict[str, Any]:
-        """Complete 2FA authentication"""
+        """Завершение двухфакторной аутентификации"""
         if not self.two_factor_ticket:
-            raise Exception("No two-factor authentication ticket found")
+            raise Exception("Двухфакторный билет отсутствует")
 
         url = f"{self.base_url}/profiles/sessions"
 
@@ -268,16 +263,14 @@ class UbisoftAuth:
             response_data = response.json()
 
             if response.status_code != 200:
-                print(f"2FA failed with status {response.status_code}")
+                print(f"Ошибка двухфакторной аутентификации. Статус: {response.status_code}")
                 self.clear_saved_data()
                 return response_data
 
             if "ticket" in response_data:
                 self.token = response_data["ticket"]
                 self.headers["Authorization"] = f"Ubi_v1 t={self.token}"
-                self.token_expiry = datetime.now() + timedelta(
-                    hours=TOKEN_LIFETIME_HOURS
-                )
+                self.token_expiry = datetime.now() + timedelta(hours=TOKEN_LIFETIME_HOURS)
 
                 remember_me_ticket = response_data.get("rememberMeTicket")
                 if remember_me_ticket:
@@ -291,20 +284,20 @@ class UbisoftAuth:
                     remember_me_ticket,
                 )
 
-                # Start token refresh after successful 2FA
+                # Запуск обновления токена после успешной двухфакторной аутентификации
                 self.start_token_refresh()
 
             return response_data
 
         except requests.exceptions.RequestException as e:
-            print(f"Request error during 2FA: {str(e)}")
+            print(f"Ошибка запроса при двухфакторной аутентификации: {str(e)}")
             self.clear_saved_data()
             return {"error": str(e)}
 
     def refresh_session_with_remember_me(self) -> Dict[str, Any]:
-        """Refresh session using remember_me_ticket"""
+        """Обновление сессии с помощью remember_me_ticket"""
         if not self.remember_me_ticket:
-            return {"error": "No remember_me_ticket available"}
+            return {"error": "Отсутствует remember_me_ticket"}
 
         url = f"{self.base_url}/profiles/sessions"
         headers = self.headers.copy()
@@ -317,15 +310,13 @@ class UbisoftAuth:
             response_data = response.json()
 
             if response.status_code != 200:
-                print(f"Session refresh failed with status {response.status_code}")
+                print(f"Ошибка обновления сессии. Статус: {response.status_code}")
                 return response_data
 
             if "ticket" in response_data:
                 self.token = response_data["ticket"]
                 self.headers["Authorization"] = f"Ubi_v1 t={self.token}"
-                self.token_expiry = datetime.now() + timedelta(
-                    hours=TOKEN_LIFETIME_HOURS
-                )
+                self.token_expiry = datetime.now() + timedelta(hours=TOKEN_LIFETIME_HOURS)
 
                 new_remember_me = response_data.get("rememberMeTicket")
                 if new_remember_me:
@@ -342,5 +333,5 @@ class UbisoftAuth:
             return response_data
 
         except requests.exceptions.RequestException as e:
-            print(f"Request error during session refresh: {str(e)}")
+            print(f"Ошибка запроса при обновлении сессии: {str(e)}")
             return {"error": str(e)}

@@ -1,6 +1,8 @@
 import asyncio
 from typing import Dict, List
 
+import winsound
+
 
 class MarketAnalyzer:
     def __init__(self, client):
@@ -8,17 +10,16 @@ class MarketAnalyzer:
         self.client = client
         self.selling_list = []
 
-    async def create_sell_order(self, item_data):
+    async def create_sell_order(self, item_data, price=9900):
         if (
             item_data.get("price_change") > 100
             or item_data.get("active_count_change") > 1
         ) and item_data.get("item_id") not in self.selling_list:
-
+            winsound.PlaySound("C:\Windows\Media\Windows Logon.wav", winsound.SND_FILENAME )
             print(
                 f"Создание ордера на продажу для предмета {item_data.get('name')} (ID: {item_data.get('item_id')})"
             )
             try:
-                price = 9900
                 result = await self.client.create_sell_order(
                     space_id="0d2ae42d-4c27-4cb7-af6c-2099062302bb",
                     item_id=item_data.get("item_id"),
@@ -70,7 +71,7 @@ class MarketAnalyzer:
         )
         print("---")
 
-    async def analyze(self, items: List[Dict]):
+    async def analyze(self, items: List[Dict], sell_price=9900):
         significant_changes = []
         tasks = []
 
@@ -104,7 +105,7 @@ class MarketAnalyzer:
                             "owner": item.get("tags")[0].split(".")[-1],
                         }
                         significant_changes.append(change_data)
-                        tasks.append(self.create_sell_order(change_data))
+                        tasks.append(self.create_sell_order(change_data, sell_price))
 
             self.previous_data[item_id] = market_info
 
