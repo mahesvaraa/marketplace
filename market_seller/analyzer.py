@@ -1,4 +1,3 @@
-import asyncio
 from typing import Dict, List
 
 import winsound
@@ -11,11 +10,13 @@ class MarketAnalyzer:
         self.selling_list = []
 
     async def create_sell_order(self, item_data, price=9900):
-        if (
-            item_data.get("price_change") > 100
-            or item_data.get("active_count_change") > 1
-        ) and item_data.get("item_id") not in self.selling_list:
-            winsound.PlaySound("C:\Windows\Media\Windows Logon.wav", winsound.SND_FILENAME )
+        if (item_data.get("price_change") > 100 or item_data.get("active_count_change") > 1) and item_data.get("item_id") not in self.selling_list:
+            if item_data.get("price_change") > 7000:
+                self.selling_list.append(item_data)
+                return
+            winsound.PlaySound(
+                "C:\Windows\Media\Windows Logon.wav", winsound.SND_FILENAME
+            )
             print(
                 f"Создание ордера на продажу для предмета {item_data.get('name')} (ID: {item_data.get('item_id')})"
             )
@@ -73,7 +74,6 @@ class MarketAnalyzer:
 
     async def analyze(self, items: List[Dict], sell_price=9900):
         significant_changes = []
-        tasks = []
 
         for item in items:
             item_id = item.get("item_id")
@@ -103,12 +103,15 @@ class MarketAnalyzer:
                             "active_listings": market_info.get("active_listings"),
                             "type": item.get("type"),
                             "owner": item.get("tags")[0].split(".")[-1],
+                            "active_buy_count": market_info.get("active_buy_count", 0),
+                            "buy_range": f'{market_info.get("lowest_buy_price")} - {market_info.get("highest_buy_price")}',
+                            "highest_buy_price": market_info.get("highest_buy_price"),
                         }
                         significant_changes.append(change_data)
-                        tasks.append(self.create_sell_order(change_data, sell_price))
+
+                        # Немедленный вызов create_sell_order
+                        await self.create_sell_order(change_data, sell_price)
 
             self.previous_data[item_id] = market_info
 
-        if tasks:
-            await asyncio.gather(*tasks)
         return significant_changes
