@@ -59,11 +59,12 @@ REFRESH_INTERVAL_MINUTES = 20
 # URL и заголовки
 BASE_URL = "https://public-ubiservices.ubi.com/v3"
 DEFAULT_HEADERS = {
-    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/132.0.0.0 Safari/537.36",
     "Content-Type": "application/json",
     "Ubi-AppId": "685a3038-2b04-47ee-9c5a-6403381a46aa",
     "Ubi-RequestedPlatformType": "uplay",
     "Accept": "*/*",
     "Origin": "https://connect.ubisoft.com",
     "Referer": "https://connect.ubisoft.com/",
+    "accept-language": "ru-RU,ru;q=0.9"
 }

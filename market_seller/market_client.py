@@ -102,7 +102,7 @@ class AsyncUbisoftMarketClient:
         async with self.session.post(API_URL, json=payload, headers=self.headers, timeout=10) as response:
             result = await response.json()
             await self._handle_response_errors(response, result)
-            return result.get("data")
+            return result.get("data", [])
 
     @staticmethod
     def _create_trade_data(
