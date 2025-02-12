@@ -72,11 +72,7 @@ class DatabaseManager:
                     item["market_info"]["highest_price"],
                     item["market_info"]["active_listings"],
                     item["market_info"]["last_sold_price"],
-                    (
-                        item["market_info"]["last_sold_at"].isoformat()
-                        if item["market_info"]["last_sold_at"]
-                        else None
-                    ),
+                    (item["market_info"]["last_sold_at"].isoformat() if item["market_info"]["last_sold_at"] else None),
                 ),
             )
             self.connection.commit()
