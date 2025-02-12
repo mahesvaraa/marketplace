@@ -89,7 +89,7 @@ class AsyncUbisoftMarketClient:
         if "errors" in result and "cancelOrder" not in str(result):
             play_notification_sound()
             self.auth.refresh_session_with_remember_me()
-            # self.logger.error(f"GraphQL errors: {result.get('errors')}")
+            self.logger.error(f"GraphQL errors: {result.get('errors')[0].get('message')}")
             raise Exception(f"GraphQL errors: {result.get('errors')}")
 
     async def execute_query(self, query: str, variables: dict) -> Dict:
