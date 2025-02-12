@@ -13,7 +13,7 @@ DEFAULT_SOUND_PATH = r"C:\Windows\Media\Windows Logon.wav"
 
 def play_notification_sound(sound_path=DEFAULT_SOUND_PATH):
     """Универсальное воспроизведение звука уведомления в отдельном потоке"""
-    if os.path.exists(sound_path):
+    if os.path.exists(sound_path) and config.USE_SOUND:
         threading.Thread(target=winsound.PlaySound, args=(sound_path, winsound.SND_FILENAME)).start()
 
 
