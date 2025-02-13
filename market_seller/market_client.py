@@ -142,7 +142,7 @@ class AsyncUbisoftMarketClient:
             trade_id = result.get("createSellOrder").get("trade").get("tradeId")
 
             trade_data = self._create_trade_data(space_id, trade_id, item_id, quantity, price)
-            self.db.insert_sell_order(trade_data)
+            # self.db.insert_sell_order(trade_data)
             # self.logger.info(f"Successfully created sell order: {trade_data}")
             return result
         except Exception as e:
@@ -160,7 +160,7 @@ class AsyncUbisoftMarketClient:
         try:
             result = await self.execute_query(mutation, variables)
             trade_data = self._create_trade_data(space_id, trade_id, None, None, price, is_update=True)
-            self.db.insert_sell_order(trade_data)
+            # self.db.insert_sell_order(trade_data)
             self.logger.info(f"Successfully updated sell order: {trade_data}")
             return result
         except Exception as e:

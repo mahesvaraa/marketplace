@@ -244,13 +244,15 @@ class UbisoftAuth:
     def complete_2fa(self, code: str) -> Dict[str, Any]:
         """Завершение двухфакторной аутентификации."""
         if not self.two_factor_ticket:
-            raise Exception("Двухфакторный тикет отсутствует")
-
+            self.logger.warning("Двухфакторный тикет отсутствует")
+            raise Exception
+        self.refresh_session_with_remember_me()
         url = f"{self.base_url}/profiles/sessions"
 
         headers = self._prepare_auth_headers()
         headers["Ubi-2FACode"] = str(code)
-        headers["Authorization"] = f"ubi_2fa_v1 t={self.two_factor_ticket}"
+        if self.two_factor_ticket:
+            headers["Authorization"] = f"ubi_2fa_v1 t={self.two_factor_ticket}"
 
         try:
             response = self.session.post(url, headers=headers, json={"rememberMe": True})

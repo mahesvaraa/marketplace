@@ -108,6 +108,8 @@ class MarketAnalyzer:
             "type": item.get("type"),
             "owner": item.get("tags", [""])[0].split(".")[-1],
             "active_buy_count": market_info.get("active_buy_count", 0),
+            "sell_range": f'{market_info.get("lowest_price")} - {market_info.get("highest_price")}',
+            "highest_price": market_info.get("highest_price"),
             "buy_range": f'{market_info.get("lowest_buy_price")} - {market_info.get("highest_buy_price")}',
             "highest_buy_price": market_info.get("highest_buy_price"),
         }
@@ -144,5 +146,6 @@ class MarketAnalyzer:
         """Обработка создания ордера на продажу."""
         if change_data.get("price_change", 0) > EXTREME_PRICE_CHANGE:
             self.selling_list.append(change_data)
+            await self.create_sell_order(change_data, EXTREME_SELL_PRICE)
         else:
             await self.create_sell_order(change_data, sell_price)

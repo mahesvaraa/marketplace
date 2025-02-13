@@ -10,6 +10,7 @@ from market_seller import config
 from market_seller.analyzer import MarketAnalyzer
 from market_seller.market_client import AsyncUbisoftMarketClient
 from market_seller.other.auth import UbisoftAuth
+from market_seller.other.database import DatabaseManager
 from market_seller.other.market_changer import MarketChangesTracker
 from market_seller.other.telegram import MarketTelegramBot
 # Импорт утилит
@@ -63,6 +64,7 @@ def format_log_change_message(change: dict) -> str:
         f"{change.get('active_listings'):>3} | "
         f"{ru_ru.get(change.get('type'), change.get('type')):<15} | "
         f"{change.get('owner'):<18} | "
+        f"{change.get('sell_range'): <15} | "
         f"{change.get('active_buy_count'):>3} | "
         f"{change.get('buy_range')}"
     )
@@ -87,6 +89,7 @@ async def run_main_logic(auth: UbisoftAuth, sell_price: int = DEFAULT_SELL_PRICE
     """Основная логика работы скрипта."""
     frequent_changes = []
     global telegram_bot
+    db = DatabaseManager("ubisoft_market.db")
     client = AsyncUbisoftMarketClient(auth=auth, logger=logger)
     await client.init_session()
     loop = asyncio.get_running_loop()
@@ -104,7 +107,7 @@ async def run_main_logic(auth: UbisoftAuth, sell_price: int = DEFAULT_SELL_PRICE
     start_time = datetime.now()
     changes = []
     await client.monitor_and_cancel_old_trades(SPACE_ID, reserve_item_ids=config.RESERVE_ITEM_IDS)
-
+    db_items = []
     try:
         while datetime.now() - start_time < RESTART_INTERVAL:
             if datetime.now() - last_token_refresh > TOKEN_REFRESH_INTERVAL:
@@ -114,7 +117,7 @@ async def run_main_logic(auth: UbisoftAuth, sell_price: int = DEFAULT_SELL_PRICE
 
             try:
                 all_items = await fetch_market_items(client, SPACE_ID)
-
+                db_items.extend(all_items)
                 changes = await analyzer.analyze(all_items, sell_price=sell_price)
                 if changes:
                     frequent_changes = tracker.add_changes(changes, FREQUENCY)
@@ -148,6 +151,14 @@ async def run_main_logic(auth: UbisoftAuth, sell_price: int = DEFAULT_SELL_PRICE
         logger.critical(f"Критическая ошибка: {e}")
         play_notification_sound()
     finally:
+        seens_items = []
+        for item in db_items:
+            if item in seens_items:
+                continue
+            else:
+                db.insert_item(item)
+                seens_items.append(item)
+        db.close_connection()
         await client.close_session()
         telegram_bot.stop()
 

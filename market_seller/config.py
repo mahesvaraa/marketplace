@@ -4,7 +4,8 @@ from datetime import timedelta
 # Основные настройки
 SELL_PRICE = 15432  # Цена продажи при больших изменениях
 FREQ_SELL_PRICE = 2498  # Цена продажи при частых изменениях
-RESERVE_ITEM_IDS = []  # Список айдишников предметов не для автоснятия
+EXTREME_SELL_PRICE = 498  # Цена продажи если уже прошла продажа свыше EXTREME_PRICE_CHANGE
+RESERVE_ITEM_IDS = []  # Список айдишников предметов , которые не будут сняты автоснятием
 MAX_AGE_MINUTES_TRADE = 30  # Время после которого товар будет снят
 USE_SOUND = False  # Пиликать или нет на всякие действия
 
@@ -15,7 +16,7 @@ PAGES_TO_FETCH = 8  # Кол-во страниц для парсинга
 TOKEN_REFRESH_INTERVAL = timedelta(minutes=15)  # Интервал обновления токена
 RESTART_INTERVAL = timedelta(minutes=60)  # Интервал обновления для перезапуска
 SLEEP_INTERVAL = 2.5  # Время между проверками
-RESTART_DELAY = 5  # Таймаут между перезапусками (те которые 60 минут)
+RESTART_DELAY = 2  # Таймаут между перезапусками (те которые 60 минут)
 HISTORY_FREQUENT_SIZE = 6  # Сколько изменений хранить для "частых" изменений
 FREQUENCY = 3  # на какое число совпадений реагировать
 
