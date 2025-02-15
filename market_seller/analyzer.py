@@ -132,6 +132,11 @@ class MarketAnalyzer:
                     if self._should_create_sell_order(change_data):
                         await self._process_sell_order(change_data, sell_price)
 
+                if previous_market_info.get('highest_price') / market_info.get("highest_price") <= DIFFERENCE_SELL_PRICE:
+
+                    change_data = self._prepare_change_data(item, market_info, previous_market_info)
+                    await self._process_sell_order(change_data, market_info.get("highest_price") - 10)
+
             self.previous_data[item_id] = market_info
 
         return significant_changes

@@ -39,6 +39,7 @@ class DatabaseManager:
                 lowest_buy_price INTEGER,
                 highest_buy_price INTEGER,
                 active_buy_count INTEGER,
+                recorded_at TEXT,
                 FOREIGN KEY (item_id) REFERENCES items (item_id)
             )
         """)
@@ -66,7 +67,7 @@ class DatabaseManager:
         current_last_sold_at = (market_info["last_sold_at"].isoformat()
                               if market_info["last_sold_at"] else None)
 
-        # Сравниваем все значения
+        # Сравниваем все значения кроме recorded_at
         current_values = (
             market_info["lowest_price"],
             market_info["highest_price"],
@@ -105,8 +106,8 @@ class DatabaseManager:
                     INSERT INTO price_history (
                         item_id, lowest_price, highest_price, active_listings,
                         last_sold_price, last_sold_at, lowest_buy_price,
-                        highest_buy_price, active_buy_count
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        highest_buy_price, active_buy_count, recorded_at
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """, (
                     item["item_id"],
                     item["market_info"]["lowest_price"],
@@ -116,7 +117,8 @@ class DatabaseManager:
                     item["market_info"]["last_sold_at"].isoformat() if item["market_info"]["last_sold_at"] else None,
                     item["market_info"]["lowest_buy_price"],
                     item["market_info"]["highest_buy_price"],
-                    item["market_info"]["active_buy_count"]
+                    item["market_info"]["active_buy_count"],
+                    item["market_info"]["recorded_at"]
                 ))
 
             self.connection.commit()
@@ -130,7 +132,7 @@ class DatabaseManager:
             cursor.execute("""
                 SELECT * FROM price_history 
                 WHERE item_id = ? 
-                ORDER BY id DESC 
+                ORDER BY recorded_at DESC 
                 LIMIT ?
             """, (item_id, limit))
             return cursor.fetchall()

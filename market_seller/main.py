@@ -102,6 +102,7 @@ async def run_main_logic(auth: UbisoftAuth, sell_price: int = DEFAULT_SELL_PRICE
     telegram_bot.run(loop)
 
     last_token_refresh = datetime.now()
+    last_trades_refresh = datetime.now()
     analyzer = MarketAnalyzer(client, logger, bot=telegram_bot)
     tracker = MarketChangesTracker(history_size=HISTORY_FREQUENT_SIZE)
     start_time = datetime.now()
@@ -113,6 +114,9 @@ async def run_main_logic(auth: UbisoftAuth, sell_price: int = DEFAULT_SELL_PRICE
             if datetime.now() - last_token_refresh > TOKEN_REFRESH_INTERVAL:
                 client.auth.refresh_token()
                 last_token_refresh = datetime.now()
+
+            if datetime.now() - last_trades_refresh > TRADES_CANCEL_CHECK_INTERVAL:
+                last_trades_refresh = datetime.now()
                 await client.monitor_and_cancel_old_trades(SPACE_ID, reserve_item_ids=config.RESERVE_ITEM_IDS)
 
             try:
@@ -152,12 +156,21 @@ async def run_main_logic(auth: UbisoftAuth, sell_price: int = DEFAULT_SELL_PRICE
         play_notification_sound()
     finally:
         seens_items = []
+
         for item in db_items:
-            if item in seens_items:
+            # Создаем копию item без ключа recorded_at
+            item_copy = item.copy()
+            if "market_info" in item_copy:
+                item_copy["market_info"] = item_copy["market_info"].copy()
+                item_copy["market_info"].pop("recorded_at", None)
+
+            # Проверяем, есть ли этот элемент в seens_items
+            if item_copy in seens_items:
                 continue
             else:
                 db.insert_item(item)
-                seens_items.append(item)
+                seens_items.append(item_copy)
+
         db.close_connection()
         await client.close_session()
         telegram_bot.stop()

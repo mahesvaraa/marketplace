@@ -44,7 +44,8 @@ class MarketTelegramBot:
         def handle_text(message):
             if not self.loop:
                 return
-
+            if not self.admin_chat_id or not self.bot:
+                       return  # Если бот остановлен, не отправлять уведомления
             if message.text == "Отменить старые заказы":
                 asyncio.run_coroutine_threadsafe(self._cancel_old_trades(message.chat.id), self.loop)
             elif message.text == "Активные заказы":
@@ -54,6 +55,8 @@ class MarketTelegramBot:
 
         @self.bot.callback_query_handler(func=lambda call: call.data.startswith(("cancel_trade_", "ignore_item_")))
         def handle_callback(call):
+            if not self.admin_chat_id or not self.bot:
+                return  # Если бот остановлен, не отправлять уведомления
             if call.data.startswith("cancel_trade_"):
                 trade_id = call.data.replace("cancel_trade_", "")
                 asyncio.run_coroutine_threadsafe(self._cancel_specific_trade(call.message.chat.id, trade_id), self.loop)
@@ -71,8 +74,8 @@ class MarketTelegramBot:
 
     async def _cancel_old_trades(self, chat_id):
         """Отмена старых заказов"""
-        if not self.bot:
-            return  # Если бот остановлен, не выполнять
+        if not self.admin_chat_id or not self.bot:
+            return  # Если бот остановлен, не отправлять уведомления
         try:
             result = await self.client.monitor_and_cancel_old_trades(SPACE_ID, reserve_item_ids=config.RESERVE_ITEM_IDS)
             await self.send_message(chat_id, f"Старые заказы отменены\nРезультат: {len(result)}\n" + '\n'.join([f"{trade['name']} (срок: {int(trade['age_minutes'])})" for trade in result]))
@@ -81,8 +84,8 @@ class MarketTelegramBot:
 
     async def _cancel_specific_trade(self, chat_id, trade_id):
         """Отмена конкретного заказа"""
-        if not self.bot:
-            return
+        if not self.admin_chat_id or not self.bot:
+                   return  # Если бот остановлен, не отправлять уведомления
         try:
             await self.client.cancel_old_trade(SPACE_ID, trade_id)
             await self.send_message(chat_id, f"Заказ {trade_id} успешно отменен")
@@ -93,8 +96,8 @@ class MarketTelegramBot:
 
     async def _get_pending_trades(self, chat_id):
         """Получение списка активных заказов с кнопками отмены"""
-        if not self.bot:
-            return
+        if not self.admin_chat_id or not self.bot:
+                   return  # Если бот остановлен, не отправлять уведомления
         try:
             response = await self.client.get_pending_trades(SPACE_ID)
             data = response
@@ -128,8 +131,8 @@ class MarketTelegramBot:
 
     async def _get_pending_trades_for_ignore(self, chat_id):
         """Получение списка активных заказов с кнопками добавления в игнор"""
-        if not self.bot:
-            return
+        if not self.admin_chat_id or not self.bot:
+                   return  # Если бот остановлен, не отправлять уведомления
         try:
             response = await self.client.get_pending_trades(SPACE_ID)
             data = response
@@ -161,8 +164,8 @@ class MarketTelegramBot:
 
     async def _add_item_to_ignore(self, chat_id, item_id):
         """Добавление предмета в игнор-лист"""
-        if not self.bot:
-            return
+        if not self.admin_chat_id or not self.bot:
+                   return  # Если бот остановлен, не отправлять уведомления
         try:
             update_reserved_ids(item_id)
             await self.send_message(chat_id, f"Предмет {item_id} добавлен в игнор-лист")
@@ -173,8 +176,8 @@ class MarketTelegramBot:
 
     async def send_message(self, chat_id, text):
         """Асинхронная отправка сообщения"""
-        if not self.bot:
-            return  # Если бот остановлен, не отправлять сообщения
+        if not self.admin_chat_id or not self.bot:
+                   return  # Если бот остановлен, не отправлять уведомления
         await asyncio.get_event_loop().run_in_executor(None, partial(self.bot.send_message, chat_id, text))
 
     @staticmethod

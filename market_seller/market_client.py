@@ -1,4 +1,5 @@
 import asyncio
+import re
 from datetime import datetime, timezone
 from typing import Dict, List, Optional
 
@@ -90,6 +91,12 @@ class AsyncUbisoftMarketClient:
             play_notification_sound()
             self.auth.refresh_session_with_remember_me()
             self.logger.error(f"GraphQL errors: {result.get('errors')[0].get('message')}")
+            if 'Too many requests' in result.get('errors')[0].get('message'):
+                match = re.search(r"\b(\d+)\s+seconds?\b", result.get('errors')[0].get('message'))
+
+                if match:
+                    seconds = int(match.group(1))
+                    await asyncio.sleep(seconds)
             raise Exception(f"GraphQL errors: {result.get('errors')}")
 
     async def execute_query(self, query: str, variables: dict) -> Dict:
@@ -195,6 +202,7 @@ class AsyncUbisoftMarketClient:
                 "lowest_buy_price": buy_stats.get("lowest_price", 0),
                 "highest_buy_price": buy_stats.get("highestPrice", 0),
                 "active_buy_count": buy_stats.get("activeCount", 0),
+                "recorded_at": datetime.utcnow().isoformat()
             },
         }
 
