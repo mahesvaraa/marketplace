@@ -12,6 +12,7 @@ class MarketAnalyzer:
         self.selling_list = []
         self.bot = bot
         self.logger = logger
+        self.tracker = MarketChangesTracker(history_size=HISTORY_FREQUENT_SIZE)
 
     @staticmethod
     def _is_token_invalid(error: Exception) -> bool:
@@ -142,9 +143,8 @@ class MarketAnalyzer:
                     await self._process_sell_order(change_data, int(market_info.get("highest_price") * 0.9))
 
             self.previous_data[item_id] = market_info
-        tracker = MarketChangesTracker(history_size=HISTORY_FREQUENT_SIZE)
         if significant_changes:
-            frequent_changes = tracker.add_changes(significant_changes, FREQUENCY)
+            frequent_changes = self.tracker.add_changes(significant_changes, FREQUENCY)
             for change in significant_changes:
                 self.logger.info(self.format_log_change_message(change))
 
