@@ -2,6 +2,7 @@ from typing import Dict, List, Optional
 
 from config import *
 from market_seller.other.utils import play_notification_sound
+from other.market_changer import MarketChangesTracker
 
 
 class MarketAnalyzer:
@@ -63,7 +64,7 @@ class MarketAnalyzer:
             self.logger.warning("Невалидный токен, обновляем...")
             self.client.auth.refresh_token()
         else:
-            self.logger.error(f"Ошибка при создании ордера: {error}")
+            # self.logger.error(f"Ошибка при создании ордера: {error}")
             play_notification_sound()
 
     def print_change_info(self, item_data: Dict):
@@ -132,18 +133,32 @@ class MarketAnalyzer:
                     if self._should_create_sell_order(change_data):
                         await self._process_sell_order(change_data, sell_price)
 
-                if previous_market_info.get('highest_price') / market_info.get("highest_price") <= DIFFERENCE_SELL_PRICE:
+                if (
+                    previous_market_info.get("highest_price") / market_info.get("highest_price")
+                    <= DIFFERENCE_SELL_PRICE
+                ):
 
                     change_data = self._prepare_change_data(item, market_info, previous_market_info)
-                    await self._process_sell_order(change_data, market_info.get("highest_price") - 10)
+                    await self._process_sell_order(change_data, int(market_info.get("highest_price") * 0.9))
 
             self.previous_data[item_id] = market_info
+        tracker = MarketChangesTracker(history_size=HISTORY_FREQUENT_SIZE)
+        if significant_changes:
+            frequent_changes = tracker.add_changes(significant_changes, FREQUENCY)
+            for change in significant_changes:
+                self.logger.info(self.format_log_change_message(change))
 
+            if frequent_changes:
+                for change in frequent_changes:
+                    await self.create_sell_order(change, FREQ_SELL_PRICE)
         return significant_changes
 
     def _should_create_sell_order(self, change_data: Dict) -> bool:
         """Определение необходимости создания ордера на продажу."""
-        is_significant_change = change_data.get("price_change", 0) > SIGNIFICANT_PRICE_CHANGE or change_data.get("active_count_change", 0) > SIGNIFICANT_ACTIVE_COUNT_CHANGE
+        is_significant_change = (
+            change_data.get("price_change", 0) > SIGNIFICANT_PRICE_CHANGE
+            or change_data.get("active_count_change", 0) > SIGNIFICANT_ACTIVE_COUNT_CHANGE
+        )
         is_not_selling = change_data.get("item_id") not in self.selling_list
         return is_significant_change and is_not_selling
 
@@ -154,3 +169,28 @@ class MarketAnalyzer:
             await self.create_sell_order(change_data, EXTREME_SELL_PRICE)
         else:
             await self.create_sell_order(change_data, sell_price)
+
+    @staticmethod
+    def format_log_change_message(change: dict) -> str:
+        """Форматирование лога с информацией об изменении."""
+        ru_ru = {
+            "CharacterUniform": "ФОРМА",
+            "WeaponSkin": "СКИН НА ОРУЖИЕ",
+            "CharacterHeadgear": "ШЛЕМ",
+            "Charm": "ЗНАЧОК",
+            "OperatorCardBackground": "ФОН",
+            "OperatorCardPortrait": "ПОРТРЕТ",
+            "WeaponAttachmentSkinSet": "СКИН НА МОДУЛИ",
+        }
+        return (
+            f"{change.get('name'):<29} | "
+            f"{change.get('new_price'):>7} | "
+            f"{change.get('price_change'):>7} | "
+            f"{change.get('active_count_change'):>3} | "
+            f"{change.get('active_listings'):>3} | "
+            f"{ru_ru.get(change.get('type'), change.get('type')):<15} | "
+            f"{change.get('owner'):<18} | "
+            f"{change.get('sell_range'): <15} | "
+            f"{change.get('active_buy_count'):>3} | "
+            f"{change.get('buy_range')}"
+        )

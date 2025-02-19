@@ -15,7 +15,7 @@ from market_seller.other.utils import update_reserved_ids
 
 
 class MarketTelegramBot:
-    _is_running = False  # Флаг для отслеживания состояния бота
+    _is_running = False
 
     def __init__(self, token: str, market_client, logger, admin_chat_id):
         telebot.logger.handlers = []
@@ -24,8 +24,9 @@ class MarketTelegramBot:
         self.admin_chat_id = admin_chat_id
         self.loop = None
         self.logger = logger
-        self._thread = None  # Поток бота
-        self._stop_event = threading.Event()  # Флаг остановки
+        self._thread = None
+        self._stop_event = threading.Event()
+        self.price_update_state = {}
         self._setup_handlers()
 
     def _setup_handlers(self):
@@ -45,24 +46,35 @@ class MarketTelegramBot:
             if not self.loop:
                 return
             if not self.admin_chat_id or not self.bot:
-                       return  # Если бот остановлен, не отправлять уведомления
+                return
+
             if message.text == "Отменить старые заказы":
                 asyncio.run_coroutine_threadsafe(self._cancel_old_trades(message.chat.id), self.loop)
             elif message.text == "Активные заказы":
                 asyncio.run_coroutine_threadsafe(self._get_pending_trades(message.chat.id), self.loop)
             elif message.text == "Добавить предмет в игнор":
                 asyncio.run_coroutine_threadsafe(self._get_pending_trades_for_ignore(message.chat.id), self.loop)
+            elif message.text == "Обновить цену":
+                asyncio.run_coroutine_threadsafe(self._get_pending_trades_for_price_update(message.chat.id), self.loop)
+            elif message.chat.id in self.price_update_state:
+                asyncio.run_coroutine_threadsafe(self._process_price_update(message.chat.id, message.text), self.loop)
 
-        @self.bot.callback_query_handler(func=lambda call: call.data.startswith(("cancel_trade_", "ignore_item_")))
+        @self.bot.callback_query_handler(
+            func=lambda call: call.data.startswith(("cancel_trade_", "ignore_item_", "update_price_"))
+        )
         def handle_callback(call):
             if not self.admin_chat_id or not self.bot:
-                return  # Если бот остановлен, не отправлять уведомления
+                return
+
             if call.data.startswith("cancel_trade_"):
                 trade_id = call.data.replace("cancel_trade_", "")
                 asyncio.run_coroutine_threadsafe(self._cancel_specific_trade(call.message.chat.id, trade_id), self.loop)
             elif call.data.startswith("ignore_item_"):
                 item_id = call.data.replace("ignore_item_", "")
                 asyncio.run_coroutine_threadsafe(self._add_item_to_ignore(call.message.chat.id, item_id), self.loop)
+            elif call.data.startswith("update_price_"):
+                trade_id = call.data.replace("update_price_", "")
+                asyncio.run_coroutine_threadsafe(self._initiate_price_update(call.message.chat.id, trade_id), self.loop)
 
     @staticmethod
     def _create_main_keyboard():
@@ -70,26 +82,30 @@ class MarketTelegramBot:
         keyboard.add(KeyboardButton("Отменить старые заказы"))
         keyboard.add(KeyboardButton("Активные заказы"))
         keyboard.add(KeyboardButton("Добавить предмет в игнор"))
+        keyboard.add(KeyboardButton("Обновить цену"))
         return keyboard
 
     async def _cancel_old_trades(self, chat_id):
         """Отмена старых заказов"""
         if not self.admin_chat_id or not self.bot:
-            return  # Если бот остановлен, не отправлять уведомления
+            return
         try:
             result = await self.client.monitor_and_cancel_old_trades(SPACE_ID, reserve_item_ids=config.RESERVE_ITEM_IDS)
-            await self.send_message(chat_id, f"Старые заказы отменены\nРезультат: {len(result)}\n" + '\n'.join([f"{trade['name']} (срок: {int(trade['age_minutes'])})" for trade in result]))
+            await self.send_message(
+                chat_id,
+                f"Старые заказы отменены\nРезультат: {len(result)}\n"
+                + "\n".join([f"{trade['name']} (срок: {int(trade['age_minutes'])})" for trade in result]),
+            )
         except Exception as e:
             await self.send_message(chat_id, f"Ошибка при отмене заказов: {str(e)}")
 
     async def _cancel_specific_trade(self, chat_id, trade_id):
         """Отмена конкретного заказа"""
         if not self.admin_chat_id or not self.bot:
-                   return  # Если бот остановлен, не отправлять уведомления
+            return
         try:
             await self.client.cancel_old_trade(SPACE_ID, trade_id)
             await self.send_message(chat_id, f"Заказ {trade_id} успешно отменен")
-            # Обновляем список активных заказов
             await self._get_pending_trades(chat_id)
         except Exception as e:
             await self.send_message(chat_id, f"Ошибка при отмене заказа {trade_id}: {str(e)}")
@@ -97,7 +113,7 @@ class MarketTelegramBot:
     async def _get_pending_trades(self, chat_id):
         """Получение списка активных заказов с кнопками отмены"""
         if not self.admin_chat_id or not self.bot:
-                   return  # Если бот остановлен, не отправлять уведомления
+            return
         try:
             response = await self.client.get_pending_trades(SPACE_ID)
             data = response
@@ -106,33 +122,39 @@ class MarketTelegramBot:
 
             if trades:
                 message = "Активные заказы:\n\n"
-                # Создаем клавиатуру с инлайн-кнопками
                 keyboard = InlineKeyboardMarkup()
 
-                for index, trade in enumerate(trades, 1):
+                for trade in trades:
                     trade_id = trade.get("tradeId", "Неизвестно")
                     item_info = trade.get("tradeItems", [{}])[0].get("item", {})
                     item_name = item_info.get("name", "Неизвестно")
                     price_info = trade.get("paymentProposal") or trade.get("paymentOptions", [{}])[0]
                     price = price_info.get("price", "Не указано")
 
-                    message += f"{self.convert_expires_data(trade['expiresAt'])}\n" f"Предмет: {item_name}\n" f"Цена: {price}\n" f"ID: {trade_id}\n" "\n"
+                    message += (
+                        f"{self.convert_expires_data(trade['expiresAt'])}\n"
+                        f"Предмет: {item_name}\n"
+                        f"Цена: {price}\n"
+                        f"ID: {trade_id}\n\n"
+                    )
 
-                    # Добавляем кнопку отмены для каждого заказа
-                    keyboard.add(InlineKeyboardButton(f"Отменить заказ {item_name}", callback_data=f"cancel_trade_{trade_id}"))
+                    keyboard.add(
+                        InlineKeyboardButton(f"Отменить заказ {item_name}", callback_data=f"cancel_trade_{trade_id}")
+                    )
             else:
                 message = "Активных заказов нет"
                 keyboard = None
 
-            # Отправляем сообщение с клавиатурой
-            await asyncio.get_event_loop().run_in_executor(None, partial(self.bot.send_message, chat_id, message, reply_markup=keyboard))
+            await asyncio.get_event_loop().run_in_executor(
+                None, partial(self.bot.send_message, chat_id, message, reply_markup=keyboard)
+            )
         except Exception as e:
             await self.send_message(chat_id, f"Ошибка при получении заказов: {str(e)}")
 
     async def _get_pending_trades_for_ignore(self, chat_id):
         """Получение списка активных заказов с кнопками добавления в игнор"""
         if not self.admin_chat_id or not self.bot:
-                   return  # Если бот остановлен, не отправлять уведомления
+            return
         try:
             response = await self.client.get_pending_trades(SPACE_ID)
             data = response
@@ -143,41 +165,116 @@ class MarketTelegramBot:
                 message = "Активные заказы (для добавления в игнор):\n\n"
                 keyboard = InlineKeyboardMarkup()
 
-                for index, trade in enumerate(trades, 1):
+                for trade in trades:
                     item_info = trade.get("tradeItems", [{}])[0].get("item", {})
                     item_name = item_info.get("name", "Неизвестно")
                     item_id = item_info.get("itemId")
                     price_info = trade.get("paymentProposal") or trade.get("paymentOptions", [{}])[0]
                     price = price_info.get("price", "Не указано")
 
-                    message += f"{self.convert_expires_data(trade['expiresAt'])}\n" f"Предмет: {item_name}\n" f"Цена: {price}\n" f"Item ID: {item_id}\n" "\n"
+                    message += (
+                        f"{self.convert_expires_data(trade['expiresAt'])}\n"
+                        f"Предмет: {item_name}\n"
+                        f"Цена: {price}\n"
+                        f"Item ID: {item_id}\n\n"
+                    )
 
-                    # Добавляем кнопку игнорирования для каждого предмета
-                    keyboard.add(InlineKeyboardButton(f"Добавить в игнор {item_name}", callback_data=f"ignore_item_{item_id}"))
+                    keyboard.add(
+                        InlineKeyboardButton(f"Добавить в игнор {item_name}", callback_data=f"ignore_item_{item_id}")
+                    )
             else:
                 message = "Активных заказов нет"
                 keyboard = None
 
-            await asyncio.get_event_loop().run_in_executor(None, partial(self.bot.send_message, chat_id, message, reply_markup=keyboard))
+            await asyncio.get_event_loop().run_in_executor(
+                None, partial(self.bot.send_message, chat_id, message, reply_markup=keyboard)
+            )
+        except Exception as e:
+            await self.send_message(chat_id, f"Ошибка при получении заказов: {str(e)}")
+
+    async def _get_pending_trades_for_price_update(self, chat_id):
+        """Получение списка активных заказов с кнопками обновления цены"""
+        if not self.admin_chat_id or not self.bot:
+            return
+        try:
+            response = await self.client.get_pending_trades(SPACE_ID)
+            data = response
+
+            trades = data.get("game", {}).get("viewer", {}).get("meta", {}).get("trades", {}).get("nodes", [])
+
+            if trades:
+                message = "Выберите заказ для обновления цены:\n\n"
+                keyboard = InlineKeyboardMarkup()
+
+                for trade in trades:
+                    item_info = trade.get("tradeItems", [{}])[0].get("item", {})
+                    item_name = item_info.get("name", "Неизвестно")
+                    trade_id = trade.get("tradeId", "Неизвестно")
+                    price_info = trade.get("paymentProposal") or trade.get("paymentOptions", [{}])[0]
+                    current_price = price_info.get("price", "Не указано")
+
+                    message += (
+                        f"{self.convert_expires_data(trade['expiresAt'])}\n"
+                        f"Предмет: {item_name}\n"
+                        f"Текущая цена: {current_price}\n"
+                        f"ID: {trade_id}\n\n"
+                    )
+
+                    keyboard.add(
+                        InlineKeyboardButton(f"Обновить цену {item_name}", callback_data=f"update_price_{trade_id}")
+                    )
+            else:
+                message = "Активных заказов нет"
+                keyboard = None
+
+            await asyncio.get_event_loop().run_in_executor(
+                None, partial(self.bot.send_message, chat_id, message, reply_markup=keyboard)
+            )
         except Exception as e:
             await self.send_message(chat_id, f"Ошибка при получении заказов: {str(e)}")
 
     async def _add_item_to_ignore(self, chat_id, item_id):
         """Добавление предмета в игнор-лист"""
         if not self.admin_chat_id or not self.bot:
-                   return  # Если бот остановлен, не отправлять уведомления
+            return
         try:
             update_reserved_ids(item_id)
             await self.send_message(chat_id, f"Предмет {item_id} добавлен в игнор-лист")
-            # Обновляем список активных заказов для игнора
             await self._get_pending_trades_for_ignore(chat_id)
         except Exception as e:
             await self.send_message(chat_id, f"Ошибка при добавлении предмета {item_id} в игнор: {str(e)}")
 
+    async def _initiate_price_update(self, chat_id, trade_id):
+        """Начало процесса обновления цены"""
+        try:
+            self.price_update_state[chat_id] = trade_id
+            await self.send_message(chat_id, "Введите новую цену для заказа (целое число):")
+        except Exception as e:
+            await self.send_message(chat_id, f"Ошибка при инициализации обновления цены: {str(e)}")
+
+    async def _process_price_update(self, chat_id, price_text):
+        """Обработка введенной цены и обновление заказа"""
+        try:
+            trade_id = self.price_update_state.pop(chat_id, None)
+            if not trade_id:
+                return
+
+            try:
+                new_price = int(price_text.strip())
+            except ValueError:
+                await self.send_message(chat_id, "Некорректная цена. Пожалуйста, введите целое число.")
+                return
+
+            await self.client.update_sell_order(SPACE_ID, trade_id, new_price)
+            await self.send_message(chat_id, f"Цена успешно обновлена для заказа {trade_id}")
+            await self._get_pending_trades(chat_id)
+        except Exception as e:
+            await self.send_message(chat_id, f"Ошибка при обновлении цены: {str(e)}")
+
     async def send_message(self, chat_id, text):
         """Асинхронная отправка сообщения"""
         if not self.admin_chat_id or not self.bot:
-                   return  # Если бот остановлен, не отправлять уведомления
+            return
         await asyncio.get_event_loop().run_in_executor(None, partial(self.bot.send_message, chat_id, text))
 
     @staticmethod
@@ -263,7 +360,9 @@ class MarketTelegramBot:
                 # Можно добавить более агрессивную остановку
                 import ctypes
 
-                ctypes.pythonapi.PyThreadState_SetAsyncExc(ctypes.c_long(self._thread.ident), ctypes.py_object(SystemExit))
+                ctypes.pythonapi.PyThreadState_SetAsyncExc(
+                    ctypes.c_long(self._thread.ident), ctypes.py_object(SystemExit)
+                )
 
         self.bot = None
         self.logger.info("Бот остановлен")

@@ -1,5 +1,8 @@
 import asyncio
+import logging
 import re
+from contextlib import suppress
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Dict, List, Optional
 
@@ -12,11 +15,22 @@ from market_seller.other.requests_params import RequestsParams
 from market_seller.other.utils import play_notification_sound, async_retry
 
 
+@dataclass
+class TradeData:
+    space_id: str
+    trade_id: str
+    item_id: Optional[str]
+    quantity: Optional[int]
+    price: int
+    created_at: Optional[datetime] = None
+    updated_at: Optional[datetime] = None
+
+
 class AsyncUbisoftMarketClient:
     def __init__(
         self,
         auth: UbisoftAuth,
-        logger,
+        logger: logging.Logger,
         db_name: str = "ubisoft_market.db",
     ):
         self.headers = self._build_headers(auth.token)
@@ -24,6 +38,7 @@ class AsyncUbisoftMarketClient:
         self.session = None
         self.db = DatabaseManager(db_name)
         self.logger = logger
+        self.semaphore = asyncio.Semaphore(8)
 
     @staticmethod
     def _build_headers(token: str) -> Dict[str, str]:
@@ -39,8 +54,8 @@ class AsyncUbisoftMarketClient:
         }
 
     @staticmethod
-    def _build_payment_option(price: int) -> Dict:
-        """Build payment option structure"""
+    def _create_payment_option(price: int) -> Dict:
+        """Create payment option structure"""
         return {
             "paymentItemId": DEFAULT_PAYMENT_ITEM_ID,
             "price": price,
@@ -78,8 +93,9 @@ class AsyncUbisoftMarketClient:
         """Close aiohttp session and database connection"""
         if self.session:
             await self.session.close()
+            with suppress(Exception):  # Подавляем исключение, если что-то пошло не так при закрытии
+                self.db.close_connection()
             self.session = None
-            self.db.close_connection()
 
     async def _handle_response_errors(self, response: aiohttp.ClientResponse, result: Dict):
         """Handle various API response errors"""
@@ -90,13 +106,15 @@ class AsyncUbisoftMarketClient:
         if "errors" in result and "cancelOrder" not in str(result):
             play_notification_sound()
             self.auth.refresh_session_with_remember_me()
-            self.logger.error(f"GraphQL errors: {result.get('errors')[0].get('message')}")
-            if 'Too many requests' in result.get('errors')[0].get('message'):
-                match = re.search(r"\b(\d+)\s+seconds?\b", result.get('errors')[0].get('message'))
+            # self.logger.error(f"GraphQL errors: {result.get('errors')[0].get('message')}")
+            if "Too many requests" in result.get("errors")[0].get("message"):
+                match = re.search(r"\b(\d+)\s+seconds?\b", result.get("errors")[0].get("message"))
 
                 if match:
                     seconds = int(match.group(1))
                     await asyncio.sleep(seconds)
+            if "Internal Server Error" in result.get("errors")[0].get("message"):
+                asyncio.timeout(30)
             raise Exception(f"GraphQL errors: {result.get('errors')}")
 
     async def execute_query(self, query: str, variables: dict) -> Dict:
@@ -105,45 +123,48 @@ class AsyncUbisoftMarketClient:
 
         if not self.session:
             await self.init_session()
+        async with self.semaphore:
+            async with self.session.post(API_URL, json=payload, headers=self.headers, timeout=10) as response:
+                result = await response.json()
+                await self._handle_response_errors(response, result)
+                return result.get("data", [])
 
-        async with self.session.post(API_URL, json=payload, headers=self.headers, timeout=10) as response:
-            result = await response.json()
-            await self._handle_response_errors(response, result)
-            return result.get("data", [])
-
-    @staticmethod
     def _create_trade_data(
+        self,
         space_id: str,
         trade_id: str,
         item_id: Optional[str],
         quantity: Optional[int],
         price: int,
         is_update: bool = False,
-    ) -> Dict:
+    ) -> TradeData:
         """Create trade data structure for database"""
-        trade_data = {
-            "space_id": space_id,
-            "trade_id": trade_id,
-            "item_id": item_id,
-            "quantity": quantity,
-            "price": price,
-        }
-
         if is_update:
-            trade_data["updated_at"] = datetime.utcnow().isoformat()
+            return TradeData(
+                space_id=space_id,
+                trade_id=trade_id,
+                item_id=item_id,
+                quantity=quantity,
+                price=price,
+                updated_at=datetime.utcnow().isoformat(),
+            )
         else:
-            trade_data["created_at"] = datetime.utcnow().isoformat()
-
-        return trade_data
+            return TradeData(
+                space_id=space_id,
+                trade_id=trade_id,
+                item_id=item_id,
+                quantity=quantity,
+                price=price,
+                created_at=datetime.utcnow().isoformat(),
+            )
 
     async def create_sell_order(self, space_id: str, item_id: str, quantity: int, price: int) -> Dict:
         mutation = RequestsParams.CREATE_SELL_ORDER_REQUEST
         variables = {
             "spaceId": space_id,
             "tradeItems": [{"itemId": item_id, "quantity": quantity}],
-            "paymentOptions": [self._build_payment_option(price)],
+            "paymentOptions": [self._create_payment_option(price)],
         }
-
         try:
             result = await self.execute_query(mutation, variables)
             trade_id = result.get("createSellOrder").get("trade").get("tradeId")
@@ -153,25 +174,25 @@ class AsyncUbisoftMarketClient:
             # self.logger.info(f"Successfully created sell order: {trade_data}")
             return result
         except Exception as e:
-            # self.logger.error(f"Error creating sell order: {str(e)}")
-            raise e
+            # self.logger.error(f"Error creating sell order in create_sell_order: {e}")
+            raise
 
     async def update_sell_order(self, space_id: str, trade_id: str, price: int) -> Dict:
         mutation = RequestsParams.UPDATE_SELL_ORDER_REQUEST
         variables = {
             "spaceId": space_id,
             "tradeId": trade_id,
-            "paymentOptions": [self._build_payment_option(price)],
+            "paymentOptions": [self._create_payment_option(price)],
         }
 
         try:
             result = await self.execute_query(mutation, variables)
             trade_data = self._create_trade_data(space_id, trade_id, None, None, price, is_update=True)
             # self.db.insert_sell_order(trade_data)
-            self.logger.info(f"Successfully updated sell order: {trade_data}")
+            # self.logger.info(f"Successfully updated sell order: {trade_data}")
             return result
         except Exception as e:
-            self.logger.error(f"Error updating sell order: {str(e)}")
+            self.logger.error(f"Error updating sell order in update_sell_order: {e}")
 
     @staticmethod
     def _parse_stats(stats: Optional[List[Dict]], default: Dict = None) -> Dict:
@@ -202,7 +223,7 @@ class AsyncUbisoftMarketClient:
                 "lowest_buy_price": buy_stats.get("lowest_price", 0),
                 "highest_buy_price": buy_stats.get("highestPrice", 0),
                 "active_buy_count": buy_stats.get("activeCount", 0),
-                "recorded_at": datetime.utcnow().isoformat()
+                "recorded_at": datetime.utcnow().isoformat(),
             },
         }
 
@@ -227,7 +248,8 @@ class AsyncUbisoftMarketClient:
 
             return items
         except Exception as e:
-            self.logger.error(f"Error parsing market data: {str(e)}")
+            self.logger.error(f"Ошибка при обработке предметов: {e}")
+            return []
 
     @async_retry(max_retries=3, delay=1)
     async def get_sellable_items(
@@ -257,13 +279,14 @@ class AsyncUbisoftMarketClient:
     async def refresh_token_if_needed(self):
         """Refresh authentication token if expired"""
         if self.auth.is_token_expired():
-            self.logger.info("Token expired, refreshing authentication...")
+            self.logger.info("Токен истек. Попытка повторной аутентификации...")
             self.auth.basic_auth(self.auth.email, self.auth.password)
             if self.auth.two_factor_ticket:
-                code = input("Enter 2FA code: ")
+                code = input("Введите 2FA код: ")
                 self.auth.complete_2fa(code)
-                self.logger.info("2FA authentication completed")
+                self.logger.info("2FA успешно выполнена")
 
+    @async_retry(max_retries=3, delay=1)
     async def get_marketable_items(
         self,
         space_id: str,
@@ -290,7 +313,7 @@ class AsyncUbisoftMarketClient:
         try:
             return await self.execute_query(query, variables)
         except Exception as e:
-            self.logger.error(f"Error fetching marketable items: {str(e)}")
+            self.logger.error(f"Ошибка при получении списка предметов: {e}")
             await asyncio.sleep(5)
             raise
 
@@ -318,8 +341,8 @@ class AsyncUbisoftMarketClient:
         try:
             return await self.execute_query(query, variables)
         except Exception as e:
-            print(f"Error executing query: {str(e)}")
-            asyncio.timeout(5)
+            self.logger.error(f"Ошибка при получении списка активных заказов: {e}")
+            await asyncio.sleep(5)
             raise
 
     async def cancel_old_trade(self, space_id: str, trade_id: str) -> Dict:
@@ -340,29 +363,15 @@ class AsyncUbisoftMarketClient:
         try:
             return await self.execute_query(query, variables)
         except Exception as e:
-            print(f"Error canceling trade {trade_id}: {str(e)}")
+            self.logger.error(f"Ошибка отмены заказа {trade_id}: {e}")
             raise
 
     async def monitor_and_cancel_old_trades(
-        self,
-        space_id: str,
-        reserve_item_ids,
-        max_age_minutes: int = MAX_AGE_MINUTES_TRADE,
+        self, space_id: str, reserve_item_ids, max_age_minutes: int = MAX_AGE_MINUTES_TRADE
     ) -> List[Dict]:
-        """
-        Monitor pending trades and cancel those older than specified time.
-
-        Parameters:
-        space_id (str): The space ID to monitor trades for
-        max_age_minutes (int): Maximum age of trades in minutes before cancellation (default: 30)
-
-        Returns:
-        List[Dict]: List of cancelled trade responses
-        """
         cancelled_trades = []
 
         try:
-            # Get pending trades
             pending_trades = await self.get_pending_trades(space_id)
 
             if not pending_trades.get("game", {}).get("viewer", {}).get("meta", {}).get("trades", {}).get("nodes"):
@@ -370,8 +379,8 @@ class AsyncUbisoftMarketClient:
                 return cancelled_trades
 
             current_time = datetime.now(timezone.utc)
+            cancel_tasks = []
 
-            # Process each trade
             for trade in pending_trades["game"]["viewer"]["meta"]["trades"]["nodes"]:
                 if trade["category"] != "Sell" or trade["tradeItems"][0]["item"]["itemId"] in reserve_item_ids:
                     continue
@@ -382,23 +391,29 @@ class AsyncUbisoftMarketClient:
 
                 if age_minutes > max_age_minutes:
                     self.logger.info(f"Заказ отменён {name} (Срок: {age_minutes:.1f} минут)")
-                    try:
-                        cancel_result = await self.cancel_old_trade(space_id, trade["tradeId"])
-                        cancelled_trades.append(
-                            {
-                                "name": name,
-                                "age_minutes": age_minutes,
-                                "result": cancel_result,
-                            }
-                        )
-                    except Exception as e:
-                        self.logger.error(f"Ошибка при отмене заказа {trade['tradeId']}: {str(e)}")
+                    cancel_tasks.append(self._cancel_trade(space_id, trade["tradeId"], name, age_minutes))
 
-                    # Add small delay between cancellations
-                    await asyncio.sleep(1)
+            if cancel_tasks:
+                cancelled_trades = await asyncio.gather(*cancel_tasks)
 
         except Exception as e:
-            self.logger.error(f"Ошибка в авто-отмене заказов: {str(e)}")
+            self.logger.error(f"Ошибка в авто-отмене заказов: {e}")
             raise
 
         return cancelled_trades
+
+    async def _cancel_trade(self, space_id: str, trade_id: str, name: str, age_minutes: float) -> Dict:
+        try:
+            cancel_result = await self.cancel_old_trade(space_id, trade_id)
+            return {
+                "name": name,
+                "age_minutes": age_minutes,
+                "result": cancel_result,
+            }
+        except Exception as e:
+            self.logger.error(f"Ошибка при отмене заказа {trade_id}: {e}")
+            return {
+                "name": name,
+                "age_minutes": age_minutes,
+                "result": f"Error: {e}",
+            }

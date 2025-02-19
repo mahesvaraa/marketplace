@@ -11,9 +11,7 @@ from market_seller.analyzer import MarketAnalyzer
 from market_seller.market_client import AsyncUbisoftMarketClient
 from market_seller.other.auth import UbisoftAuth
 from market_seller.other.database import DatabaseManager
-from market_seller.other.market_changer import MarketChangesTracker
 from market_seller.other.telegram import MarketTelegramBot
-# Импорт утилит
 from market_seller.other.utils import setup_logger, play_notification_sound
 
 load_dotenv()
@@ -45,31 +43,6 @@ async def handle_exception(exception, analyzer, change):
         play_notification_sound()
 
 
-def format_log_change_message(change: dict) -> str:
-    """Форматирование лога с информацией об изменении."""
-    ru_ru = {
-        "CharacterUniform": "ФОРМА",
-        "WeaponSkin": "СКИН НА ОРУЖИЕ",
-        "CharacterHeadgear": "ШЛЕМ",
-        "Charm": "ЗНАЧОК",
-        "OperatorCardBackground": "ФОН",
-        "OperatorCardPortrait": "ПОРТРЕТ",
-        "WeaponAttachmentSkinSet": "СКИН НА МОДУЛИ",
-    }
-    return (
-        f"{change.get('name'):<25} | "
-        f"{change.get('new_price'):>7} | "
-        f"{change.get('price_change'):>7} | "
-        f"{change.get('active_count_change'):>3} | "
-        f"{change.get('active_listings'):>3} | "
-        f"{ru_ru.get(change.get('type'), change.get('type')):<15} | "
-        f"{change.get('owner'):<18} | "
-        f"{change.get('sell_range'): <15} | "
-        f"{change.get('active_buy_count'):>3} | "
-        f"{change.get('buy_range')}"
-    )
-
-
 async def fetch_market_items(client, space_id: str) -> list:
     """Получение всех доступных для продажи предметов с ретраями."""
     tasks = [
@@ -87,7 +60,6 @@ async def fetch_market_items(client, space_id: str) -> list:
 
 async def run_main_logic(auth: UbisoftAuth, sell_price: int = DEFAULT_SELL_PRICE):
     """Основная логика работы скрипта."""
-    frequent_changes = []
     global telegram_bot
     db = DatabaseManager("ubisoft_market.db")
     client = AsyncUbisoftMarketClient(auth=auth, logger=logger)
@@ -104,9 +76,7 @@ async def run_main_logic(auth: UbisoftAuth, sell_price: int = DEFAULT_SELL_PRICE
     last_token_refresh = datetime.now()
     last_trades_refresh = datetime.now()
     analyzer = MarketAnalyzer(client, logger, bot=telegram_bot)
-    tracker = MarketChangesTracker(history_size=HISTORY_FREQUENT_SIZE)
     start_time = datetime.now()
-    changes = []
     await client.monitor_and_cancel_old_trades(SPACE_ID, reserve_item_ids=config.RESERVE_ITEM_IDS)
     db_items = []
     try:
@@ -122,34 +92,12 @@ async def run_main_logic(auth: UbisoftAuth, sell_price: int = DEFAULT_SELL_PRICE
             try:
                 all_items = await fetch_market_items(client, SPACE_ID)
                 db_items.extend(all_items)
-                changes = await analyzer.analyze(all_items, sell_price=sell_price)
-                if changes:
-                    frequent_changes = tracker.add_changes(changes, FREQUENCY)
-                    for change in changes:
-                        logger.info(format_log_change_message(change))
-
-                if frequent_changes:
-                    for change in frequent_changes:
-                        item_id = change.get("item_id")
-                        if item_id not in analyzer.selling_list:
-                            await client.create_sell_order(
-                                space_id=SPACE_ID,
-                                item_id=item_id,
-                                quantity=1,
-                                price=FREQ_SELL_PRICE,
-                            )
-                            play_notification_sound()
-                            analyzer.selling_list.append(item_id)
-                            analyzer.print_change_info(change)
-                            await telegram_bot.notify_order_created(change)
+                await analyzer.analyze(all_items, sell_price=sell_price)
                 await asyncio.sleep(SLEEP_INTERVAL)
 
             except Exception as e:
-                if changes:
-                    await handle_exception(e, analyzer, changes[0])
-                else:
-                    logger.critical(f"Ошибка: {e}")
-                    play_notification_sound()
+                logger.critical(f"Ошибка: {e}")
+                play_notification_sound()
 
     except Exception as e:
         logger.critical(f"Критическая ошибка: {e}")
@@ -158,13 +106,11 @@ async def run_main_logic(auth: UbisoftAuth, sell_price: int = DEFAULT_SELL_PRICE
         seens_items = []
 
         for item in db_items:
-            # Создаем копию item без ключа recorded_at
             item_copy = item.copy()
             if "market_info" in item_copy:
                 item_copy["market_info"] = item_copy["market_info"].copy()
                 item_copy["market_info"].pop("recorded_at", None)
 
-            # Проверяем, есть ли этот элемент в seens_items
             if item_copy in seens_items:
                 continue
             else:
@@ -202,6 +148,7 @@ async def main(email: str, password: str, sell_price: int = DEFAULT_SELL_PRICE):
         await run_main_logic(auth, sell_price=sell_price)
     except Exception as e:
         logger.error(f"Ошибка во время выполнения: {e}")
+        asyncio.timeout(30)
         play_notification_sound()
 
 
