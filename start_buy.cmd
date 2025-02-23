@@ -22,7 +22,7 @@ if exist requirements.txt (
 )
 
 :: Запускаем main.py
-echo Запускаю main.py...
+echo Запускаю buy_items.py...
 python buy_items.py
 
 :: Оставляем окно открытым после завершения
