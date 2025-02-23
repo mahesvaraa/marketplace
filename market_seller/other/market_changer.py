@@ -1,5 +1,5 @@
 from collections import deque, defaultdict
-from typing import List, Dict, Any
+from typing import List, Any, Dict
 
 
 class MarketChangesTracker:
@@ -18,7 +18,7 @@ class MarketChangesTracker:
         item_frequency = defaultdict(int)
         for changes_list in self.changes_history:
             # Получаем уникальные item_id из текущего списка изменений
-            unique_items = {change["item_id"] for change in changes_list}
+            unique_items = {change.item_id for change in changes_list}
             for item_id in unique_items:
                 item_frequency[item_id] += 1
 

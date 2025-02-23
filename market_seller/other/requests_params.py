@@ -277,3 +277,19 @@ class RequestsParams(str, Enum):
                     }
                 }
             """
+
+    CREATE_BUY_ORDER_REQUEST = """
+        mutation CreateBuyOrder($spaceId: String!, $tradeItems: [TradeOrderItem!]!, $paymentProposal: PaymentItem!) {
+            createBuyOrder(
+                spaceId: $spaceId
+                tradeItems: $tradeItems
+                paymentProposal: $paymentProposal
+            ) {
+                trade {
+                    id
+                    state
+                    tradeId
+                }
+            }
+        }
+    """

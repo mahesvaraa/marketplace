@@ -87,7 +87,17 @@ async def run_main_logic(auth: UbisoftAuth, sell_price: int = DEFAULT_SELL_PRICE
 
             if datetime.now() - last_trades_refresh > TRADES_CANCEL_CHECK_INTERVAL:
                 last_trades_refresh = datetime.now()
-                await client.monitor_and_cancel_old_trades(SPACE_ID, reserve_item_ids=config.RESERVE_ITEM_IDS)
+                canceled_trades = await client.monitor_and_cancel_old_trades(
+                    SPACE_ID, reserve_item_ids=config.RESERVE_ITEM_IDS
+                )
+                if canceled_trades:
+                    item_ids = [
+                        key
+                        for key, values in analyzer.price_drop_orders.items()
+                        if values["trade_id"] in [v.values() for v in canceled_trades]
+                    ]
+                    for item_id in item_ids:
+                        del analyzer.price_drop_orders[item_id]
 
             try:
                 all_items = await fetch_market_items(client, SPACE_ID)
@@ -103,7 +113,8 @@ async def run_main_logic(auth: UbisoftAuth, sell_price: int = DEFAULT_SELL_PRICE
         logger.critical(f"Критическая ошибка: {e}")
         play_notification_sound()
     finally:
-        seens_items = []
+        seen_items = []
+        items_to_insert = []
 
         for item in db_items:
             item_copy = item.copy()
@@ -111,12 +122,11 @@ async def run_main_logic(auth: UbisoftAuth, sell_price: int = DEFAULT_SELL_PRICE
                 item_copy["market_info"] = item_copy["market_info"].copy()
                 item_copy["market_info"].pop("recorded_at", None)
 
-            if item_copy in seens_items:
-                continue
-            else:
-                db.insert_item(item)
-                seens_items.append(item_copy)
+            if item_copy not in seen_items:
+                items_to_insert.append(item)
+                seen_items.append(item_copy)
 
+        db.insert_items_batch(items_to_insert)
         db.close_connection()
         await client.close_session()
         telegram_bot.stop()

@@ -12,7 +12,7 @@ from config import *
 from market_seller.other.auth import UbisoftAuth
 from market_seller.other.database import DatabaseManager
 from market_seller.other.requests_params import RequestsParams
-from market_seller.other.utils import play_notification_sound, async_retry
+from market_seller.other.utils import play_notification_sound, async_retry, DotDict
 
 
 @dataclass
@@ -22,8 +22,8 @@ class TradeData:
     item_id: Optional[str]
     quantity: Optional[int]
     price: int
-    created_at: Optional[datetime] = None
-    updated_at: Optional[datetime] = None
+    created_at: Optional[str] = None
+    updated_at: Optional[str] = None
 
 
 class AsyncUbisoftMarketClient:
@@ -62,11 +62,13 @@ class AsyncUbisoftMarketClient:
         }
 
     @staticmethod
-    def _build_sort_params(field: str, direction: str, payment_item_id: str = DEFAULT_PAYMENT_ITEM_ID) -> Dict:
+    def _build_sort_params(
+        field: str, direction: str, payment_item_id: str = DEFAULT_PAYMENT_ITEM_ID, order_type: str = "Sell"
+    ) -> Dict:
         """Build sorting parameters"""
         return {
             "field": field,
-            "orderType": "Sell",
+            "orderType": order_type,
             "direction": direction,
             "paymentItemId": payment_item_id,
         }
@@ -129,8 +131,8 @@ class AsyncUbisoftMarketClient:
                 await self._handle_response_errors(response, result)
                 return result.get("data", [])
 
+    @staticmethod
     def _create_trade_data(
-        self,
         space_id: str,
         trade_id: str,
         item_id: Optional[str],
@@ -165,17 +167,11 @@ class AsyncUbisoftMarketClient:
             "tradeItems": [{"itemId": item_id, "quantity": quantity}],
             "paymentOptions": [self._create_payment_option(price)],
         }
-        try:
-            result = await self.execute_query(mutation, variables)
-            trade_id = result.get("createSellOrder").get("trade").get("tradeId")
+        result = await self.execute_query(mutation, variables)
+        trade_id = result.get("createSellOrder").get("trade").get("tradeId")
 
-            trade_data = self._create_trade_data(space_id, trade_id, item_id, quantity, price)
-            # self.db.insert_sell_order(trade_data)
-            # self.logger.info(f"Successfully created sell order: {trade_data}")
-            return result
-        except Exception as e:
-            # self.logger.error(f"Error creating sell order in create_sell_order: {e}")
-            raise
+        self._create_trade_data(space_id, trade_id, item_id, quantity, price)
+        return result
 
     async def update_sell_order(self, space_id: str, trade_id: str, price: int) -> Dict:
         mutation = RequestsParams.UPDATE_SELL_ORDER_REQUEST
@@ -187,9 +183,7 @@ class AsyncUbisoftMarketClient:
 
         try:
             result = await self.execute_query(mutation, variables)
-            trade_data = self._create_trade_data(space_id, trade_id, None, None, price, is_update=True)
-            # self.db.insert_sell_order(trade_data)
-            # self.logger.info(f"Successfully updated sell order: {trade_data}")
+            self._create_trade_data(space_id, trade_id, None, None, price, is_update=True)
             return result
         except Exception as e:
             self.logger.error(f"Error updating sell order in update_sell_order: {e}")
@@ -201,50 +195,54 @@ class AsyncUbisoftMarketClient:
 
     @staticmethod
     def _parse_market_item(
-        item_data: Dict,
-        market_data: Dict,
-        sell_stats: Dict,
-        last_sold: Dict,
-        buy_stats: Dict,
-    ) -> Dict:
+        item_data: DotDict,
+        sell_stats: DotDict,
+        last_sold: DotDict,
+        buy_stats: DotDict,
+    ) -> DotDict:
         """Parse individual market item data"""
-        return {
-            "name": item_data.get("name"),
-            "type": item_data.get("type"),
-            "item_id": item_data.get("itemId"),
-            "tags": item_data.get("tags"),
-            "asset_url": item_data.get("assetUrl"),
-            "market_info": {
-                "lowest_price": sell_stats.get("lowestPrice"),
-                "highest_price": sell_stats.get("highestPrice"),
-                "active_listings": sell_stats.get("activeCount"),
-                "last_sold_price": last_sold.get("price"),
-                "last_sold_at": datetime.fromisoformat(last_sold.get("performedAt").replace("Z", "+00:00")),
-                "lowest_buy_price": buy_stats.get("lowest_price", 0),
-                "highest_buy_price": buy_stats.get("highestPrice", 0),
-                "active_buy_count": buy_stats.get("activeCount", 0),
-                "recorded_at": datetime.utcnow().isoformat(),
-            },
-        }
+        return DotDict(
+            {
+                "name": item_data.name,
+                "type": item_data.type,
+                "item_id": item_data.itemId,
+                "tags": item_data.tags,
+                "asset_url": item_data.assetUrl,
+                "market_info": {
+                    "lowest_price": sell_stats.lowestPrice,
+                    "highest_price": sell_stats.highestPrice,
+                    "active_listings": sell_stats.activeCount,
+                    "last_sold_price": last_sold.price,
+                    "last_sold_at": datetime.fromisoformat(last_sold.performedAt.replace("Z", "+00:00")),
+                    "lowest_buy_price": buy_stats.get("lowest_price", 0),
+                    "highest_buy_price": buy_stats.get("highestPrice", 0),
+                    "active_buy_count": buy_stats.get("activeCount", 0),
+                    "recorded_at": datetime.utcnow().isoformat(),
+                },
+            }
+        )
 
-    def parse_market_data(self, response: Dict) -> List[Dict]:
+    def parse_market_data(self, response: Dict) -> List[DotDict]:
         """Parse market data with error handling"""
         items = []
+        response = DotDict(response)
         try:
-            nodes = response["game"]["viewer"]["meta"]["marketableItems"]["nodes"]
+            if response.game.get("viewer"):
+                nodes = response.game.viewer.meta.marketableItems.nodes
+            else:
+                nodes = response.game.marketableItems.nodes
             for node in nodes:
-                item_data = node.get("item")
-                market_data = node.get("marketData")
+                item_data = node.item
+                market_data = node.marketData
 
-                sell_stats = self._parse_stats(market_data.get("sellStats"))
-                last_sold = self._parse_stats(market_data.get("lastSoldAt"))
-                buy_stats = self._parse_stats(market_data.get("buyStats"))
+                sell_stats = DotDict(self._parse_stats(market_data.sellStats))
+                last_sold = DotDict(self._parse_stats(market_data.lastSoldAt))
+                buy_stats = DotDict(self._parse_stats(market_data.buyStats))
 
                 if sell_stats and last_sold:
-                    parsed_item = self._parse_market_item(item_data, market_data, sell_stats, last_sold, buy_stats)
+                    parsed_item = self._parse_market_item(item_data, sell_stats, last_sold, buy_stats)
                     items.append(parsed_item)
-                    # self.db.insert_item(parsed_item)
-                    self.logger.debug(f"Parsed and stored item: {parsed_item['name']}")
+                    self.logger.debug(f"Parsed and stored item: {parsed_item.name}")
 
             return items
         except Exception as e:
@@ -263,15 +261,17 @@ class AsyncUbisoftMarketClient:
         sort_field: str = DEFAULT_SORT_FIELD,
         sort_direction: str = DEFAULT_SORT_DIRECTION,
         payment_item_id: str = DEFAULT_PAYMENT_ITEM_ID,
+        query=RequestsParams.GET_SELLABLE_ITEMS_REQUEST,
+        order_type="Sell",
     ) -> Dict:
-        query = RequestsParams.GET_SELLABLE_ITEMS_REQUEST
+
         variables = {
             "spaceId": space_id,
             "limit": limit,
             "offset": offset,
             "withOwnership": with_ownership,
             "filterBy": self._build_filter_params(item_types, tags),
-            "sortBy": self._build_sort_params(sort_field, sort_direction, payment_item_id),
+            "sortBy": self._build_sort_params(sort_field, sort_direction, payment_item_id, order_type),
         }
 
         return await self.execute_query(query, variables)
@@ -296,11 +296,11 @@ class AsyncUbisoftMarketClient:
         tags: List[str] = None,
         hide_owned: bool = True,
         with_ownership: bool = True,
-        sort_field: str = DEFAULT_MARKETABLE_SORT_FIELD,
-        sort_direction: str = DEFAULT_MARKETABLE_SORT_DIRECTION,
+        sort_field: str = "ACTIVE_COUNT",
+        sort_direction: str = "ASC",
         payment_item_id: str = DEFAULT_PAYMENT_ITEM_ID,
+        query=RequestsParams.GET_MARKETABLE_ITEMS_QUERY,
     ) -> Dict:
-        query = RequestsParams.GET_MARKETABLE_ITEMS_QUERY
         variables = {
             "spaceId": space_id,
             "limit": limit,
@@ -408,12 +408,30 @@ class AsyncUbisoftMarketClient:
             return {
                 "name": name,
                 "age_minutes": age_minutes,
+                "trade_id": trade_id,
                 "result": cancel_result,
             }
         except Exception as e:
             self.logger.error(f"Ошибка при отмене заказа {trade_id}: {e}")
             return {
                 "name": name,
+                "trade_id": trade_id,
                 "age_minutes": age_minutes,
                 "result": f"Error: {e}",
             }
+
+    async def create_buy_order(
+        self, space_id: str, item_id: str, quantity: int, payment_item_id: str, price: int
+    ) -> Dict:
+        mutation = RequestsParams.CREATE_BUY_ORDER_REQUEST
+        variables = {
+            "spaceId": space_id,
+            "tradeItems": [{"itemId": item_id, "quantity": quantity}],
+            "paymentProposal": {"paymentItemId": payment_item_id, "price": price},
+        }
+
+        result = await self.execute_query(mutation, variables)
+        trade_id = result.get("createBuyOrder").get("trade").get("tradeId")
+
+        self._create_trade_data(space_id, trade_id, item_id, quantity, price)
+        return result
